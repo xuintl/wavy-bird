@@ -1,3 +1,8 @@
+// Base canvas dimensions (keep game logic consistent)
+const BASE_WIDTH = 288;
+const BASE_HEIGHT = 512;
+let canvasRenderer;
+
 // Game assets
 let sprites = {};
 let birdFrames = [];
@@ -60,7 +65,8 @@ function preload() {
 }
 
 function setup() {
-  createCanvas(288, 512);
+  canvasRenderer = createCanvas(BASE_WIDTH, BASE_HEIGHT);
+  applyViewportScale();
   bird = new Bird();
 
   // Setup audio for pitch detection
@@ -91,19 +97,19 @@ function getPitch() {
 
   pitch.getPitch((err, frequency) => {
     const amplitude = mic.getLevel();
-    
+
     // Only update frequency if amplitude is above the noise threshold
     if (amplitude > noiseThreshold) {
       voiceIsActive = true;
       if (frequency) {
         currentFreq = frequency;
-        
+
         // Add to history for smoothing
         freqHistory.push(frequency);
         if (freqHistory.length > SMOOTHING_WINDOW) {
           freqHistory.shift();
         }
-        
+
         // Calculate smoothed frequency (average of recent readings)
         smoothedFreq = freqHistory.reduce((a, b) => a + b, 0) / freqHistory.length;
       }
@@ -111,12 +117,12 @@ function getPitch() {
       voiceIsActive = false;
     }
     // If below threshold, don't reset frequencies, let the bird hover
-    
+
     console.log(`Detected: ${currentFreq.toFixed(2)} Hz | Smoothed: ${smoothedFreq.toFixed(2)} Hz | Amp: ${amplitude.toFixed(3)}`);
-    
+
     // Continue the loop
     if (gameState !== 'gameOver') {
-        getPitch();
+      getPitch();
     }
   });
 }
@@ -191,9 +197,9 @@ function drawPlayingScreen() {
       stopSound();
       gameState = 'gameOver';
     }
-    
+
     // Update score
-    if(pipes[i].pass(bird)) {
+    if (pipes[i].pass(bird)) {
       score++;
       sounds.point.play();
     }
@@ -208,7 +214,7 @@ function drawPlayingScreen() {
   bird.handlePitch(smoothedFreq, voiceIsActive);
   bird.update();
   bird.show();
-  
+
   // Check for ground collision
   if (bird.y + bird.h / 2 > height - sprites.base.height) {
     sounds.hit.play();
@@ -248,28 +254,28 @@ function drawBase() {
 }
 
 function drawDebugInfo() {
-    fill(0);
-    textSize(10);
-    textAlign(LEFT, TOP);
-    text(`Low: ${minPitch.toFixed(0)} Hz`, 5, 5);
-    text(`High: ${maxPitch.toFixed(0)} Hz`, 5, 20);
-    text(`Threshold: ${noiseThreshold.toFixed(3)}`, 5, 35);
-    textSize(12); // Reset text size
+  fill(0);
+  textSize(10);
+  textAlign(LEFT, TOP);
+  text(`Low: ${minPitch.toFixed(0)} Hz`, 5, 5);
+  text(`High: ${maxPitch.toFixed(0)} Hz`, 5, 20);
+  text(`Threshold: ${noiseThreshold.toFixed(3)}`, 5, 35);
+  textSize(12); // Reset text size
 }
 
 function drawScore(yPos = 30) {
-    const scoreStr = score.toString();
-    let totalWidth = 0;
-    for(let char of scoreStr) {
-        totalWidth += sprites.numbers[parseInt(char)].width;
-    }
+  const scoreStr = score.toString();
+  let totalWidth = 0;
+  for (let char of scoreStr) {
+    totalWidth += sprites.numbers[parseInt(char)].width;
+  }
 
-    let x = (width - totalWidth) / 2;
-    for(let char of scoreStr) {
-        const num = parseInt(char);
-        image(sprites.numbers[num], x, yPos);
-        x += sprites.numbers[num].width;
-    }
+  let x = (width - totalWidth) / 2;
+  for (let char of scoreStr) {
+    const num = parseInt(char);
+    image(sprites.numbers[num], x, yPos);
+    x += sprites.numbers[num].width;
+  }
 }
 
 // --- USER INPUT AND GAME RESET ---
@@ -283,13 +289,13 @@ function mousePressed() {
       sounds.swoosh.play();
       gameState = 'calibrateNoise';
       // Start pitch detection process, which now includes creating the mic
-      startPitch(); 
+      startPitch();
       // Calibrate noise, then pitch, then play
       setTimeout(() => {
         // Set noise threshold (average level + a buffer)
         noiseThreshold = mic.getLevel() * 1.5 + 0.01;
         console.log("Noise threshold set to: " + noiseThreshold);
-        
+
         gameState = 'calibratePitch';
         isCalibratingLow = true;
         // Capture lowest pitch after a short delay
@@ -305,10 +311,10 @@ function mousePressed() {
             isCalibratingHigh = false;
             // Ensure model is loaded before starting game loop with getPitch
             if (pitch) {
-                gameState = 'playing';
+              gameState = 'playing';
             } else {
-                console.log("Pitch model not ready, waiting...");
-                // Add a fallback or wait mechanism if needed
+              console.log("Pitch model not ready, waiting...");
+              // Add a fallback or wait mechanism if needed
             }
           }, 3000);
         }, 3000);
@@ -321,12 +327,12 @@ function mousePressed() {
 }
 
 function stopSound() {
-    if (mic && mic.enabled) {
-        mic.stop();
-        console.log("Microphone stopped.");
-    }
-    // Also nullify the pitch object to be recreated
-    pitch = null; 
+  if (mic && mic.enabled) {
+    mic.stop();
+    console.log("Microphone stopped.");
+  }
+  // Also nullify the pitch object to be recreated
+  pitch = null;
 }
 
 function resetGame() {
@@ -371,7 +377,7 @@ class Bird {
       this.y = height - sprites.base.height;
     }
   }
-  
+
   // Improved pitch control with no falling
   handlePitch(freq, isActive) {
     if (isActive && freq > 50) { // Only respond to meaningful frequencies
@@ -408,7 +414,7 @@ class Pipe {
   show() {
     // Draw bottom pipe
     image(sprites.pipe, this.x, this.bottom);
-    
+
     // Draw top pipe (flipped)
     push();
     translate(this.x + this.w, this.top);
@@ -427,15 +433,15 @@ class Pipe {
 
   hits(bird) {
     // Check if bird is within the x-range of the pipe
-    if (bird.x + bird.w/2 > this.x && bird.x - bird.w/2 < this.x + this.w) {
+    if (bird.x + bird.w / 2 > this.x && bird.x - bird.w / 2 < this.x + this.w) {
       // Check if bird hits the top or bottom pipe
-      if (bird.y - bird.h/2 < this.top || bird.y + bird.h/2 > this.bottom) {
+      if (bird.y - bird.h / 2 < this.top || bird.y + bird.h / 2 > this.bottom) {
         return true;
       }
     }
     return false;
   }
-  
+
   pass(bird) {
     if (bird.x > this.x + this.w && !this.passed) {
       this.passed = true;
@@ -443,4 +449,36 @@ class Pipe {
     }
     return false;
   }
+}
+
+// --- VIEWPORT AND DISPLAY HELPERS ---
+
+function applyViewportScale() {
+  if (!canvasRenderer) {
+    return;
+  }
+  const viewportHeight = windowHeight || window.innerHeight || BASE_HEIGHT;
+  const scaleFactor = viewportHeight / BASE_HEIGHT;
+  const scaledWidth = BASE_WIDTH * scaleFactor;
+  canvasRenderer.style('height', `${viewportHeight}px`);
+  canvasRenderer.style('width', `${scaledWidth}px`);
+  canvasRenderer.style('max-width', '100vw');
+  canvasRenderer.style('display', 'block');
+}
+
+function windowResized() {
+  applyViewportScale();
+}
+
+function keyPressed() {
+  if (key === 'f' || key === 'F') {
+    toggleFullscreen();
+  }
+}
+
+function toggleFullscreen() {
+  const fs = fullscreen();
+  fullscreen(!fs);
+  // Allow the browser a moment to enter/exit fullscreen before re-scaling
+  setTimeout(applyViewportScale, 150);
 }

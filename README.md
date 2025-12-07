@@ -1,10 +1,11 @@
-# Voice-Controlled Flappy Bird
+# Pitchy Bird: Voice-Controlled Flappy Bird
 
 A web-based clone of the classic Flappy Bird game, controlled entirely by your voice using Machine Learning. This project uses **p5.js** for game rendering and **ml5.js** for real-time audio pitch detection.
 
 ## Overview
 
 Instead of tapping the screen or clicking a mouse, players must hum, sing, or whistle to control the bird. The game utilizes the microphone to detect sound frequency (pitch).
+
 - **Make noise/Sing High:** The bird flaps/flies up.
 - **Silence/Low Pitch:** The bird falls.
 
@@ -14,6 +15,8 @@ Instead of tapping the screen or clicking a mouse, players must hum, sing, or wh
 - **Sprite Rendering:** Classic pixel-art style graphics using p5.js image handling.
 - **Debug Mode:** Visual feedback for pitch frequency (Hz) and noise thresholds.
 - **Score System:** Sprite-based score rendering.
+- **Responsive Zoom:** Canvas automatically scales to match the current window height for a full-viewport experience.
+- **Fullscreen Toggle:** Press `F` at any time to enter or exit fullscreen mode instantly.
 
 ## Project Structure
 
@@ -75,6 +78,7 @@ npx http-server
    - Produce a steady tone (humming works best) to make the bird fly.
    - Stop making noise to let gravity pull the bird down.
 5. Avoid the pipes!
+6. Press `F` if you want to toggle fullscreen.
 
 ## Technologies Used
 
