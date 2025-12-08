@@ -1,9 +1,5 @@
-// Base canvas dimensions (keep game logic consistent)
-const BASE_WIDTH = 288;
-const BASE_HEIGHT = 512;
-let canvasRenderer;
-
 // Game assets
+let canvasRenderer;
 let sprites = {};
 let birdFrames = [];
 let sounds = {};
@@ -17,17 +13,11 @@ let gameState = 'nameEntry'; // 'nameEntry', 'start', 'playing', 'gameOver', 're
 let participantName = '';
 let score = 0; // Can go negative
 let base_x = 0; // for scrolling base
-let voiceIsActive = false; // Legacy mic flag (unused now)
 let totalCollisions = 0;
 let tiltErrors = 0;
+let playingStartMs = 0;
 
-// Stages (tutorial + 3 levels)
-const stages = [
-  { key: 'tutorial', label: 'Tutorial - Practice', pipeIntervalMs: 5000, gap: 280, targetPasses: 8, maxDurationMs: 120000 },
-  { key: 'level1', label: 'Level 1', pipeIntervalMs: 4000, gap: 250, targetPasses: 15 },
-  { key: 'level2', label: 'Level 2', pipeIntervalMs: 3500, gap: 230, targetPasses: 15 },
-  { key: 'level3', label: 'Level 3', pipeIntervalMs: 3000, gap: 210, targetPasses: 10 }
-];
+// Stage state
 let stageIndex = 0;
 let stagePasses = 0;
 let stageStartMs = 0;
@@ -40,30 +30,9 @@ let serialStatus = 'disconnected'; // disconnected | connecting | connected | er
 let latestTiltEvent = null; // {dir, velocity, angle, ts}
 let bumpQueued = false; // true when a BUMP event is received
 let lastTiltProcessedMs = 0; // Debounce tilt events
+let inputMode = 'keyboard'; // 'serial' or 'keyboard'
 
-// Stimuli & logging
-const simpleAttributes = [
-  { word: 'Happy', sentiment: 'good' },
-  { word: 'Sad', sentiment: 'bad' },
-  { word: 'Brave', sentiment: 'good' },
-  { word: 'Mean', sentiment: 'bad' },
-  { word: 'Kind', sentiment: 'good' },
-  { word: 'Honest', sentiment: 'good' },
-  { word: 'Cheerful', sentiment: 'good' },
-  { word: 'Cruel', sentiment: 'bad' },
-  { word: 'Dishonest', sentiment: 'bad' },
-  { word: 'Angry', sentiment: 'bad' }
-];
-const categoryPairs = [
-  { word: 'Female Doctor', expectedTilt: 'left' },
-  { word: 'Male Nurse', expectedTilt: 'right' },
-  { word: 'Gay Teacher', expectedTilt: 'left' },
-  { word: 'Old Coder', expectedTilt: 'right' },
-  { word: 'Female Engineer', expectedTilt: 'left' },
-  { word: 'Disabled Genius', expectedTilt: 'left' },
-  { word: 'Black CEO', expectedTilt: 'left' },
-  { word: 'Homeless Veteran', expectedTilt: 'right' }
-];
+// Trial data
 let trialData = [];
 let sessionId = Math.floor(Math.random() * 1e6).toString(16);
 let currentTrialNum = 0;
@@ -75,24 +44,6 @@ let markerOverlays = []; // array of {x,y,color,expiresMs}
 let floatingTexts = []; // array of FloatingText instances
 let tutorialFeedbacks = []; // array of {text,color,expiresMs}
 let transitionOverlay = null; // {text, expiresMs}
-
-// Pitch detection
-let mic;
-let pitch;
-let audioContext;
-let currentFreq = 0;
-let smoothedFreq = 0;
-let freqHistory = []; // Store recent frequencies for better smoothing
-const SMOOTHING_WINDOW = 5; // Number of readings to average
-
-// Calibration
-let minPitch = 100; // Default low C
-let maxPitch = 500; // Default high C
-let noiseThreshold = 0.01; // Default amplitude threshold
-let isCalibratingLow = false;
-let isCalibratingHigh = false;
-
-const model_url = 'https://cdn.jsdelivr.net/gh/ml5js/ml5-data-and-models/models/pitch-detection/crepe/';
 
 // Preload all image sprites
 function preload() {
@@ -124,6 +75,8 @@ function preload() {
 
 function setup() {
   canvasRenderer = createCanvas(BASE_WIDTH, BASE_HEIGHT);
+  pixelDensity(1); // Avoid HiDPI scaling artifacts on text/UI
+  canvasRenderer.parent('main');
   applyViewportScale();
   bird = new Bird();
 
@@ -140,62 +93,6 @@ function setup() {
 
   initStage();
   console.log('[DEBUG] Setup complete. Initial state:', gameState);
-}
-
-// --- PITCH DETECTION FUNCTIONS ---
-
-function startPitch() {
-  // Create a new mic instance each time we start pitch detection
-  mic = new p5.AudioIn();
-  // The callback function will start pitch detection after the mic is ready
-  mic.start(() => {
-    pitch = ml5.pitchDetection(model_url, audioContext, mic.stream, modelLoaded);
-  }, (err) => {
-    console.error("Mic start error:", err);
-  });
-}
-
-function modelLoaded() {
-  console.log('Pitch model loaded');
-  getPitch();
-}
-
-function getPitch() {
-  if (!mic.enabled) return; // Stop listening if mic is off
-
-  pitch.getPitch((err, frequency) => {
-    const amplitude = mic.getLevel();
-
-    // Only update frequency if amplitude is above the noise threshold
-    if (amplitude > noiseThreshold) {
-      voiceIsActive = true;
-      if (frequency) {
-        currentFreq = frequency;
-
-        // Add to history for smoothing
-        freqHistory.push(frequency);
-        if (freqHistory.length > SMOOTHING_WINDOW) {
-          freqHistory.shift();
-        }
-
-        // Calculate smoothed frequency (average of recent readings)
-        smoothedFreq = freqHistory.reduce((a, b) => a + b, 0) / freqHistory.length;
-      }
-    } else {
-      voiceIsActive = false;
-    }
-    // If below threshold, don't reset frequencies, let the bird hover
-
-    // Throttled logging for pitch to avoid console flood (every ~60 frames or 1 sec approx)
-    if (frameCount % 60 === 0) {
-      console.log(`[DEBUG] Pitch: ${currentFreq.toFixed(2)} Hz | Smoothed: ${smoothedFreq.toFixed(2)} Hz | Amp: ${amplitude.toFixed(3)}`);
-    }
-
-    // Continue the loop
-    if (gameState !== 'gameOver') {
-      getPitch();
-    }
-  });
 }
 
 // --- GAME LOGIC AND DRAW LOOP ---
@@ -235,7 +132,7 @@ function drawNameEntryScreen() {
   noStroke();
   textAlign(CENTER, CENTER);
   textSize(24);
-  text("Welcome to Flappy Bird IAT", width / 2, height / 3);
+  text("Welcome to Wavy Bird", width / 2, height / 3);
 
   textSize(16);
   text("Enter your name to begin:", width / 2, height / 2 - 40);
@@ -270,7 +167,7 @@ function drawStartScreen() {
   text("Welcome, " + participantName + "!", width / 2, height / 2 - 220);
 
   textSize(12);
-  text("You'll practice recognizing:\nGREEN = GOOD words → Tilt LEFT\nRED = BAD words → Tilt RIGHT\n\nClick to start tutorial", width / 2, height / 2 - 180);
+  text("Wave to flap!\n\nClick to start", width / 2, height / 2 - 180);
   pop();
 }
 
@@ -292,10 +189,11 @@ function drawPlayingScreen() {
   const nowMs = millis();
   if (nowMs >= nextPipeDueMs) {
     const pipe = new Pipe(stage.gap);
-    assignStimulus(pipe, stage);
+    // assignStimulus(pipe, stage);
     pipes.push(pipe);
     activePipeRef = pipe;
-    nextPipeDueMs = nowMs + stage.pipeIntervalMs;
+    // Dynamic pipe interval
+    nextPipeDueMs = nowMs + random(2000, stage.pipeIntervalMs);
   }
 
   for (let i = pipes.length - 1; i >= 0; i--) {
@@ -335,6 +233,7 @@ function drawPlayingScreen() {
   bird.show();
 
   // Handle tilt event once per trial with debounce
+  /*
   if (latestTiltEvent && activePipeRef && activePipeRef.trial) {
     const tiltAge = nowMs - latestTiltEvent.ts;
     const timeSinceLastTilt = nowMs - lastTiltProcessedMs;
@@ -345,6 +244,7 @@ function drawPlayingScreen() {
       latestTiltEvent = null; // Consume after successful recording
     }
   }
+  */
 
   // Check for ground collision
   if (bird.y + bird.h / 2 > height - sprites.base.height) {
@@ -353,10 +253,10 @@ function drawPlayingScreen() {
 
   drawScore();
   drawHud(stage);
-  drawTutorialOverlay();
-  drawStimulusOverlay();
-  drawTutorialFeedback();
-  drawFeedbackOverlays();
+  // drawTutorialOverlay();
+  // drawStimulusOverlay();
+  // drawTutorialFeedback();
+  // drawFeedbackOverlays();
   drawFloatingTexts();
   drawDebugInfo();
 }
@@ -393,8 +293,8 @@ function drawResultsScreen() {
   fill(255);
   text(`Pipes Cleared: ${pipesCleared}/40`, width / 2, height / 2 - 45);
   text(`Total Collisions: ${totalCollisions}`, width / 2, height / 2 - 20);
-  text(`Tilt Errors: ${tiltErrors}`, width / 2, height / 2 + 5);
-  text(`Tilt Accuracy: ${accuracy.toFixed(1)}%`, width / 2, height / 2 + 30);
+  // text(`Tilt Errors: ${tiltErrors}`, width / 2, height / 2 + 5);
+  // text(`Tilt Accuracy: ${accuracy.toFixed(1)}%`, width / 2, height / 2 + 30);
 
   textSize(12);
   text("Click to replay. Press 'E' to download CSV + summary.", width / 2, height / 2 + 60);
@@ -403,7 +303,7 @@ function drawResultsScreen() {
 
 function drawBase() {
   // Create a seamless scrolling effect
-  base_x -= 2;
+  base_x -= BASE_SCROLL_SPEED;
   if (base_x <= -width) {
     base_x = 0;
   }
@@ -418,8 +318,11 @@ function drawDebugInfo() {
   textSize(10);
   textAlign(LEFT, TOP);
   text(`Serial: ${serialStatus}`, 5, 5);
+  text(`Input: ${inputMode}`, 5, 18);
   if (latestTiltEvent) {
-    text(`Tilt: ${latestTiltEvent.dir} v=${latestTiltEvent.velocity.toFixed(0)} a=${latestTiltEvent.angle.toFixed(1)}`, 5, 20);
+    const v = latestTiltEvent.velocity != null ? latestTiltEvent.velocity.toFixed(0) : '-';
+    const a = latestTiltEvent.angle != null ? latestTiltEvent.angle.toFixed(1) : '-';
+    text(`Tilt: ${latestTiltEvent.dir} v=${v} a=${a}`, 5, 32);
   }
   pop();
 }
@@ -499,7 +402,7 @@ function drawTutorialOverlay() {
   const bumpX = redX + 130;
   fill(255);
   textSize(12);
-  text('BUMP to flap', bumpX, legendY + boxH / 2);
+  text('WAVE to flap', bumpX, legendY + boxH / 2);
 
   // Counter
   const counterX = panelX + panelW - 100;
@@ -608,6 +511,8 @@ function mousePressed() {
       sounds.swoosh.play();
       gameState = 'playing';
       initStage();
+      // Start pitch detection
+      startPitch();
       break;
     case 'gameOver':
       console.log('[DEBUG] State transition: gameOver -> reset');
@@ -877,141 +782,6 @@ function triggerDownload(filename, content) {
   URL.revokeObjectURL(url);
 }
 
-// --- BIRD CLASS ---
-
-class Bird {
-  constructor() {
-    this.y = height / 2;
-    this.x = 64;
-    this.w = 34; // Approximate width from asset
-    this.h = 24; // Approximate height from asset
-    this.vy = 0;
-    this.gravity = 0.35; // Reduced from 0.6 for slower fall
-    this.lift = -7.5; // Reduced from -9.5 for gentler bumps
-    this.frame = 0;
-  }
-
-  show() {
-    // Animate the bird by cycling through frames
-    const currentFrame = birdFrames[floor(this.frame) % birdFrames.length];
-    image(currentFrame, this.x - this.w / 2, this.y - this.h / 2);
-    this.frame += 0.2; // Control animation speed
-  }
-
-  update() {
-    this.vy += this.gravity;
-    this.y += this.vy;
-
-    // Keep bird in bounds
-    if (this.y < 0) {
-      this.y = 0;
-      this.vy = 0;
-    }
-    const floorY = height - sprites.base.height;
-    if (this.y > floorY) {
-      this.y = floorY;
-      this.vy = 0;
-    }
-  }
-
-  flap() {
-    this.vy = this.lift;
-    if (sounds.wing && !sounds.wing.isPlaying()) {
-      sounds.wing.play();
-    }
-  }
-}
-
-// --- PIPE CLASS ---
-
-class Pipe {
-  constructor(spacing = 125, speed = 2) {
-    this.spacing = spacing; // Space between top and bottom pipe
-    this.top = random(height / 6, 3 / 4 * height - this.spacing);
-    this.bottom = this.top + this.spacing;
-    this.x = width;
-    this.w = 52; // Width of the pipe asset
-    this.speed = speed;
-    this.passed = false;
-    this.trial = null; // {trialNum, word, category, colorCue, expectedTilt, wordShownMs, pipeCleared, level}
-  }
-
-  show() {
-    // Draw bottom pipe
-    image(sprites.pipe, this.x, this.bottom);
-
-    // Draw top pipe (flipped)
-    push();
-    translate(this.x + this.w, this.top);
-    scale(1, -1); // Flip vertically
-    image(sprites.pipe, 0, 0);
-    pop();
-  }
-
-  update() {
-    this.x -= this.speed;
-  }
-
-  offscreen() {
-    return this.x < -this.w;
-  }
-
-  hits(bird) {
-    // Check if bird is within the x-range of the pipe
-    if (bird.x + bird.w / 2 > this.x && bird.x - bird.w / 2 < this.x + this.w) {
-      // Check if bird hits the top or bottom pipe
-      if (bird.y - bird.h / 2 < this.top || bird.y + bird.h / 2 > this.bottom) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  pass(bird) {
-    if (bird.x > this.x + this.w && !this.passed) {
-      this.passed = true;
-      return true;
-    }
-    return false;
-  }
-}
-
-class FloatingText {
-  constructor(x, y, text, color, vy) {
-    this.x = x;
-    this.y = y;
-    this.text = text;
-    this.color = color;
-    this.vy = vy; // 1 = rise, -1 = fall, 0 = horizontal drift
-    this.vx = this.vy === 0 ? 0.5 : 0;
-    this.alpha = 255;
-    this.birthMs = millis();
-    this.lifetimeMs = 1500;
-  }
-
-  update() {
-    this.y += this.vy * 0.5;
-    this.x += this.vx;
-    const age = millis() - this.birthMs;
-    this.alpha = map(age, 0, this.lifetimeMs, 255, 0);
-  }
-
-  show() {
-    push();
-    fill(red(this.color), green(this.color), blue(this.color), this.alpha);
-    noStroke();
-    textAlign(CENTER, CENTER);
-    textSize(18);
-    textStyle(BOLD);
-    text(this.text, this.x, this.y);
-    pop();
-  }
-
-  isDead(now) {
-    return (now - this.birthMs) > this.lifetimeMs;
-  }
-}
-
 function assignStimulus(pipe, stage) {
   currentTrialNum += 1;
   const stimulus = pickStimulusForStage(stage);
@@ -1031,45 +801,6 @@ function assignStimulus(pipe, stage) {
     logged: false
   };
   console.log(`[DEBUG] Pipe spawned. Trial #${currentTrialNum}: Word="${stimulus.word}", Expect=${expectedTilt}, Level=${stage.key}`);
-}
-
-function pickStimulusForStage(stage) {
-  if (stage.key === 'tutorial') {
-    return buildStimulus(sample(simpleAttributes));
-  }
-
-  const roll = random();
-  if (stage.key === 'level1') {
-    return roll < 0.6 ? buildStimulus(sample(simpleAttributes)) : buildStimulus(sample(categoryPairs));
-  }
-  if (stage.key === 'level2') {
-    return roll < 0.2 ? buildStimulus(sample(simpleAttributes)) : buildStimulus(sample(categoryPairs));
-  }
-  // level3
-  return buildStimulus(sample(categoryPairs));
-}
-
-function buildStimulus(base) {
-  const expectedTilt = decideExpectedTilt(base);
-  return {
-    word: base.word,
-    category: base.word,
-    expectedTilt
-  };
-}
-
-function decideExpectedTilt(base) {
-  // Use predefined tilt if available (for consistent category mapping)
-  if (base.expectedTilt) return base.expectedTilt;
-  // Sentiment-based for simple attributes
-  if (base.sentiment === 'good') return 'left';
-  if (base.sentiment === 'bad') return 'right';
-  // Fallback (shouldn't reach here with current data)
-  return random() < 0.5 ? 'left' : 'right';
-}
-
-function sample(arr) {
-  return arr[int(random(arr.length))];
 }
 
 // --- VIEWPORT AND DISPLAY HELPERS ---
@@ -1120,6 +851,22 @@ function keyPressed() {
     }
     return false; // Prevent default
   }
+
+  // Gameplay keyboard fallback
+  if (gameState === 'playing') {
+    if (key === ' ' || keyCode === 32) {
+      bumpQueued = true; // Space = flap
+      return false;
+    }
+    if (keyCode === LEFT_ARROW || key === 'ArrowLeft') {
+      registerTiltEvent('left', null, null, 'keyboard');
+      return false;
+    }
+    if (keyCode === RIGHT_ARROW || key === 'ArrowRight') {
+      registerTiltEvent('right', null, null, 'keyboard');
+      return false;
+    }
+  }
 }
 
 function toggleFullscreen() {
@@ -1129,14 +876,25 @@ function toggleFullscreen() {
   setTimeout(applyViewportScale, 150);
 }
 
+// Unified tilt registration so keyboard fallback can reuse logging path
+function registerTiltEvent(dir, velocity = null, angle = null, source = 'keyboard') {
+  latestTiltEvent = {
+    dir,
+    velocity: velocity ?? null,
+    angle: angle ?? null,
+    ts: millis(),
+    source
+  };
+}
+
 // --- WEB SERIAL INTEGRATION ---
 
 function onSerialLine(rawLine) {
   const line = rawLine.trim();
   if (!line) return;
 
-  if (line === 'BUMP') {
-    console.log('[DEBUG] Serial Event: BUMP');
+  if (line === 'WAVE') {
+    console.log('[DEBUG] Serial Event: WAVE');
     bumpQueued = true;
     return;
   }
@@ -1144,12 +902,12 @@ function onSerialLine(rawLine) {
   const tiltMatch = line.match(/^TILT_(LEFT|RIGHT):([0-9]+):(-?[0-9]+(?:\.\d+)?)/);
   if (tiltMatch) {
     console.log(`[DEBUG] Serial Event: TILT ${tiltMatch[1]} (vel=${tiltMatch[2]}, ang=${tiltMatch[3]})`);
-    latestTiltEvent = {
-      dir: tiltMatch[1] === 'LEFT' ? 'left' : 'right',
-      velocity: parseFloat(tiltMatch[2]),
-      angle: parseFloat(tiltMatch[3]),
-      ts: millis()
-    };
+    registerTiltEvent(
+      tiltMatch[1] === 'LEFT' ? 'left' : 'right',
+      parseFloat(tiltMatch[2]),
+      parseFloat(tiltMatch[3]),
+      'serial'
+    );
     return;
   }
 
@@ -1164,93 +922,12 @@ function onSerialError(err) {
 
 function onSerialOpen() {
   serialStatus = 'connected';
+  inputMode = 'serial';
   console.log('Serial connected');
 }
 
 function onSerialClose() {
   serialStatus = 'disconnected';
+  inputMode = 'keyboard';
   console.log('Serial closed');
-}
-
-class SerialManager {
-  constructor(onLine, onError, onOpen, onClose) {
-    this.onLine = onLine;
-    this.onError = onError;
-    this.onOpen = onOpen;
-    this.onClose = onClose;
-    this.port = null;
-    this.reader = null;
-    this.decoder = new TextDecoder();
-    this.buffer = '';
-  }
-
-  async connect() {
-    if (!('serial' in navigator)) {
-      serialStatus = 'unsupported';
-      console.warn('Web Serial not supported in this browser.');
-      return;
-    }
-
-    if (this.port) {
-      // Already connected; toggle to disconnect
-      await this.disconnect();
-      return;
-    }
-
-    try {
-      serialStatus = 'connecting';
-      this.port = await navigator.serial.requestPort();
-      await this.port.open({ baudRate: 115200 });
-      this.onOpen && this.onOpen();
-      this.readLoop();
-    } catch (err) {
-      serialStatus = 'error';
-      this.onError && this.onError(err);
-    }
-  }
-
-  async disconnect() {
-    try {
-      if (this.reader) {
-        await this.reader.cancel();
-      }
-      if (this.port) {
-        await this.port.close();
-      }
-    } catch (err) {
-      console.warn('Error during serial disconnect', err);
-    } finally {
-      this.port = null;
-      this.reader = null;
-      this.buffer = '';
-      this.onClose && this.onClose();
-    }
-  }
-
-  async readLoop() {
-    if (!this.port?.readable) return;
-    this.reader = this.port.readable.getReader();
-
-    try {
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { value, done } = await this.reader.read();
-        if (done) break;
-        if (value) {
-          const chunk = this.decoder.decode(value, { stream: true });
-          this.buffer += chunk;
-          let newlineIndex;
-          while ((newlineIndex = this.buffer.indexOf('\n')) >= 0) {
-            const line = this.buffer.slice(0, newlineIndex);
-            this.buffer = this.buffer.slice(newlineIndex + 1);
-            this.onLine && this.onLine(line);
-          }
-        }
-      }
-    } catch (err) {
-      this.onError && this.onError(err);
-    } finally {
-      await this.disconnect();
-    }
-  }
 }

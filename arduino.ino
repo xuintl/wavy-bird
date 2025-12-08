@@ -223,7 +223,7 @@ void detectBump(float zG)
     float deltaZ = zG - restZg;
     if (deltaZ > bumpThresholdG)
     {
-        Serial.println(F("BUMP"));
+        Serial.println(F("WAVE"));
         lastBumpMs = nowMs;
     }
 }
