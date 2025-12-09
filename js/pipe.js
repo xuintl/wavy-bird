@@ -7,7 +7,6 @@ class Pipe {
         this.w = 52; // Width of the pipe asset
         this.speed = speed;
         this.passed = false;
-        this.trial = null; // {trialNum, word, category, colorCue, expectedTilt, wordShownMs, pipeCleared, level}
     }
 
     show() {

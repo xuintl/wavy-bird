@@ -28,7 +28,7 @@ const float waveThresholdG = 0.2f;        // Minimum g-force below rest to trigg
 const unsigned long waveCooldownMs = 250; // Minimum time between wave events (ms)
 
 // Gesture state
-unsigned long lastWaveMs = 0;  // Last time a wave was emitted
+unsigned long lastWaveMs = 0; // Last time a wave was emitted
 
 // Calibration baseline
 float restZg = 1.0f;
