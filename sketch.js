@@ -1,13 +1,10 @@
 /**
  * Wavy Bird - Physical Flappy Bird Game
- * Adjust these values to tune the gameplay experience.
  */
-const CONFIG = {
-    // Canvas & World
-    WIDTH: 288,
-    HEIGHT: 512,
-    SCROLL_SPEED: 2,        // Speed at which pipes and ground move left
 
+// --- VARIABLE INITIALIZATION ---
+
+const CONFIG = {
     // Bird Physics
     GRAVITY: 0.6,           // Downward acceleration per frame
     LIFT: -10,              // Upward velocity when flapping
@@ -16,8 +13,9 @@ const CONFIG = {
     ANIMATION_SPEED: 0.2,   // Speed of wing flap animation
 
     // Pipe Generation
+    SCROLL_SPEED: 2,        // Speed at which pipes and ground move left
     PIPE_SPAWN_FRAMES: 90,  // How many frames between new pipes
-    PIPE_GAP: 125,          // Vertical space between top and bottom pipes
+    PIPE_GAP: 175,          // Vertical space between top and bottom pipes
     PIPE_WIDTH: 52,         // Width of the pipe image
 
     // Assets Paths
@@ -51,6 +49,17 @@ let gameState = 'start'; // 'start', 'playing', 'gameOver'
 let score = 0;
 let baseX = 0;
 let practiceMode = false;
+let canvasEl; // DOM canvas element reference for scaling
+const LOGICAL_WIDTH = 288;
+const LOGICAL_HEIGHT = 512;
+
+// Arduino Serial Connection
+let port;
+let reader;
+let isConnected = false;
+let connectionStatus = 'disconnected'; // 'disconnected', 'connecting', 'connected'
+let serialBuffer = '';
+let debugMode = true;
 
 // --- P5.JS LIFECYCLE FUNCTIONS ---
 
@@ -80,14 +89,79 @@ function preload() {
 }
 
 function setup() {
-    const canvas = createCanvas(CONFIG.WIDTH, CONFIG.HEIGHT);
+    pixelDensity(1); // Keep logical pixel grid stable when scaling
+
+    // Create canvas at logical size; scale via CSS to fit the window
+    const canvas = createCanvas(LOGICAL_WIDTH, LOGICAL_HEIGHT);
     canvas.parent('main'); // Attach to the main element in HTML
+    canvasEl = canvas.elt;
+
+    // Keep scaling correct when fullscreen changes
+    document.addEventListener('fullscreenchange', updateCanvasDisplaySize);
+
+    updateCanvasDisplaySize();
+    tryEnterFullscreen();
+
     bird = new Bird();
+}
+
+function windowResized() {
+    updateCanvasDisplaySize();
+}
+
+function updateCanvasDisplaySize() {
+    if (!canvasEl) {
+        return;
+    }
+
+    const availableWidth = window.innerWidth;
+    const availableHeight = window.innerHeight;
+    const scale = Math.min(availableWidth / LOGICAL_WIDTH, availableHeight / LOGICAL_HEIGHT);
+
+    const displayWidth = LOGICAL_WIDTH * scale;
+    const displayHeight = LOGICAL_HEIGHT * scale;
+
+    canvasEl.style.width = `${displayWidth}px`;
+    canvasEl.style.height = `${displayHeight}px`;
+}
+
+function tryEnterFullscreen() {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {
+            // Ignore errors (most browsers require user gesture)
+        });
+    }
+}
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(err => {
+                console.error('Fullscreen error:', err);
+            });
+        } else if (typeof fullscreen === 'function') {
+            fullscreen(true);
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen().catch(err => {
+                console.error('Exit fullscreen error:', err);
+            });
+        } else if (typeof fullscreen === 'function') {
+            fullscreen(false);
+        }
+    }
+
+    // Recompute CSS scaling shortly after fullscreen state changes
+    setTimeout(updateCanvasDisplaySize, 100);
 }
 
 function draw() {
     // Draw background
     image(sprites.background, 0, 0, width, height);
+
+    // Draw the scrolling base first (so text can be drawn on top)
+    drawBase();
 
     // Handle different game states
     switch (gameState) {
@@ -102,8 +176,8 @@ function draw() {
             break;
     }
 
-    // Draw the scrolling base
-    drawBase();
+    // Draw connection status icon at bottom
+    drawConnectionStatus();
 }
 
 // --- GAME STATE DRAWING FUNCTIONS ---
@@ -112,16 +186,22 @@ function drawStartScreen() {
     image(sprites.message, width / 2 - sprites.message.width / 2, height / 2 - 150);
 
     fill(255);
-    textAlign(CENTER, CENTER);
+    textAlign(CENTER, TOP);
     textSize(14);
     stroke(0);
     strokeWeight(2);
-    text("Press SPACE or Click to start\nPress '.' to toggle practice mode", width / 2, height / 2 - 180);
+    text("Click or Press 'Space' to start\nWave or Flap physically to Play\nPress'.' for practice mode", width / 2, height / 2 - 225);
+    textSize(12);
+    text("Press '`' to toggle fullscreen\nPress '-' to connect/disconnect Arduino\nPress '=' to calibrate Arduino", width / 2, height - 70);
 
+    // Show practice mode indicator
     if (practiceMode) {
         fill(100, 255, 100);
-        textSize(16);
-        text("PRACTICE MODE: ON", width / 2, height / 2 + 100);
+        textAlign(CENTER, TOP);
+        textSize(12);
+        stroke(0);
+        strokeWeight(2);
+        text("PRACTICE MODE", width / 2, 5);
     }
 }
 
@@ -141,8 +221,8 @@ function drawPlayingScreen() {
             gameOver();
         }
 
-        // Update score
-        if (pipes[i].pass(bird)) {
+        // Update score (skip in practice mode)
+        if (!practiceMode && pipes[i].pass(bird)) {
             score++;
             sounds.point.play();
         }
@@ -233,6 +313,24 @@ function keyPressed() {
     if (key === '.') {
         practiceMode = !practiceMode;
         console.log('Practice mode:', practiceMode ? 'ON' : 'OFF');
+        return false;
+    }
+
+    // Toggle fullscreen with '`' key
+    if (key === '`') {
+        toggleFullscreen();
+        return false;
+    }
+
+    // Toggle Arduino connection with '-' key
+    if (key === '-') {
+        toggleConnection();
+        return false;
+    }
+
+    // Calibrate Arduino with '=' key
+    if (key === '=') {
+        calibrateArduino();
         return false;
     }
 
@@ -365,4 +463,165 @@ class Pipe {
         }
         return false;
     }
+}
+
+// --- ARDUINO SERIAL CONNECTION FUNCTIONS ---
+
+async function toggleConnection() {
+    if (isConnected) {
+        await disconnectArduino();
+    } else {
+        await connectArduino();
+    }
+}
+
+async function connectArduino() {
+    if (!('serial' in navigator)) {
+        console.error('Web Serial API not supported in this browser');
+        alert('Web Serial API not supported. Please use Chrome, Edge, or Opera.');
+        return;
+    }
+
+    try {
+        connectionStatus = 'connecting';
+        console.log('Requesting serial port...');
+
+        // Request a port and open a connection
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+
+        isConnected = true;
+        connectionStatus = 'connected';
+        console.log('Connected to Arduino');
+
+        // Start reading from the port
+        readSerialData();
+
+    } catch (err) {
+        console.error('Connection error:', err);
+        connectionStatus = 'disconnected';
+        isConnected = false;
+    }
+}
+
+async function disconnectArduino() {
+    try {
+        if (reader) {
+            await reader.cancel();
+            reader = null;
+        }
+        if (port) {
+            await port.close();
+            port = null;
+        }
+        isConnected = false;
+        connectionStatus = 'disconnected';
+        console.log('Disconnected from Arduino');
+    } catch (err) {
+        console.error('Disconnect error:', err);
+    }
+}
+
+async function readSerialData() {
+    const textDecoder = new TextDecoderStream();
+    const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+
+    try {
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) {
+                console.log('Reader closed');
+                break;
+            }
+
+            // Append to buffer and process complete lines
+            serialBuffer += value;
+            let lines = serialBuffer.split('\n');
+
+            // Keep the last incomplete line in the buffer
+            serialBuffer = lines.pop();
+
+            // Process complete lines
+            for (let line of lines) {
+                line = line.trim();
+                if (line) {
+                    processSerialLine(line);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Read error:', err);
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+function processSerialLine(line) {
+    if (debugMode) {
+        console.log('[Arduino]:', line);
+    }
+
+    // Check for wave/flap command
+    if (line === 'WAVE') {
+        if (gameState === 'playing') {
+            bird.flap();
+            if (debugMode) {
+                console.log('Physical flap detected!');
+            }
+        } else if (gameState === 'gameOver') {
+            resetGame();
+            if (debugMode) {
+                console.log('Game restarted with physical wave!');
+            }
+        }
+    }
+    // Log other messages
+    else if (line.startsWith('DEBUG:') || line.startsWith('Rest position:') ||
+        line.includes('Calibrating') || line === 'READY') {
+        console.log('[Arduino]:', line);
+    }
+}
+
+async function calibrateArduino() {
+    if (!isConnected) {
+        console.log('Arduino not connected. Connect first with "-" key.');
+        return;
+    }
+
+    try {
+        console.log('Sending calibration command to Arduino...');
+        const writer = port.writable.getWriter();
+        const data = new Uint8Array([48]); // ASCII '0' to trigger calibration
+        await writer.write(data);
+        writer.releaseLock();
+        console.log('Calibration command sent');
+    } catch (err) {
+        console.error('Calibration error:', err);
+    }
+}
+
+function drawConnectionStatus() {
+    const iconSize = 12;
+    const x = width - iconSize - 10;
+    const y = height - iconSize - 10;
+
+    noStroke();
+
+    // Draw colored circle based on connection status
+    if (connectionStatus === 'connected') {
+        fill(0, 255, 0); // Green
+    } else if (connectionStatus === 'connecting') {
+        fill(255, 255, 0); // Yellow
+    } else {
+        fill(255, 0, 0); // Red
+    }
+
+    circle(x + iconSize / 2, y + iconSize / 2, iconSize);
+
+    // Add a subtle border
+    stroke(0);
+    strokeWeight(1);
+    noFill();
+    circle(x + iconSize / 2, y + iconSize / 2, iconSize);
 }
