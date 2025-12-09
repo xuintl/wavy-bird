@@ -24,20 +24,13 @@ unsigned long lastSampleMs = 0;
 const unsigned long samplePeriodMs = 50; // 20 Hz sampling
 
 // Gesture thresholds
-const float waveThresholdG = 0.5f;        // Minimum g-force below rest to trigger wave (lower = more sensitive)
-const unsigned long waveCooldownMs = 200; // Minimum time between wave events (ms)
-const float tiltOnDeg = 30.0f;            // Tilt angle required to trigger event (lower = more sensitive)
-const float tiltOffDeg = 20.0f;           // Angle below which tilt resets (hysteresis prevents flicker)
+const float waveThresholdG = 0.2f;        // Minimum g-force below rest to trigger wave (lower = more sensitive)
+const unsigned long waveCooldownMs = 250; // Minimum time between wave events (ms)
 
 // Gesture state
 unsigned long lastWaveMs = 0;  // Last time a wave was emitted
-int lastTiltDir = 0;           // -1 left, 0 none, +1 right
-float lastAngleDeg = 0.0f;     // Previous angle for velocity
-unsigned long lastAngleMs = 0; // Timestamp for velocity
 
 // Calibration baseline
-float restXg = 0.0f;
-float restYg = 0.0f;
 float restZg = 1.0f;
 bool calibrated = false;
 
@@ -66,7 +59,12 @@ void setup()
     // Set output data rate to 100 Hz (balances responsiveness and power)
     accel.setDataRate(ODR_100);
 
-    Serial.println(F("Sensor ready. Send '0' to calibrate."));
+    // Auto-calibrate once on startup so the device is immediately usable
+    Serial.println(F("Calibrating at startup..."));
+    calibrateRestPosition();
+    Serial.println(F("Calibration complete"));
+
+    Serial.println(F("Sensor ready. Press '=' in p5 (sends '0') to recalibrate."));
     Serial.println(F("READY"));
 }
 
@@ -82,6 +80,14 @@ void loop()
             calibrateRestPosition();
             Serial.println(F("Calibration complete"));
         }
+        else if (cmd == 'd' || cmd == 'D')
+        {
+            // Debug mode: print raw values
+            Serial.print(F("DEBUG: Z="));
+            Serial.print(accel.getCalculatedZ(), 3);
+            Serial.print(F(" | Rest Z="));
+            Serial.println(restZg, 3);
+        }
     }
 
     if (millis() - lastSampleMs < samplePeriodMs)
@@ -96,15 +102,10 @@ void loop()
         return;
     }
 
-    if (accel.available())
-    {
-        float x = accel.getCalculatedX();
-        float y = accel.getCalculatedY();
-        float z = accel.getCalculatedZ();
+    // Read accelerometer data
+    float z = accel.getCalculatedZ();
 
-        detectWave(z);
-        detectTilt(x, y, z);
-    }
+    detectWave(z);
 }
 
 void detectWave(float zG)
@@ -115,8 +116,8 @@ void detectWave(float zG)
         return; // Ignore waves during cooldown
     }
 
-    // Detect wave as deviation from calibrated rest Z
-    // A "wave" or "flap" usually results in a sudden drop in Z acceleration
+    // Detect wave as downward movement (drop in Z acceleration)
+    // A downward "wave" or "flap" motion triggers the bird to fly upward
     float deltaZ = restZg - zG;
     if (deltaZ > waveThresholdG)
     {
@@ -125,89 +126,32 @@ void detectWave(float zG)
     }
 }
 
-void detectTilt(float xG, float yG, float zG)
-{
-    unsigned long nowMs = millis();
-    // Calculate tilt angle around the X-axis relative to calibrated rest position
-    float relX = xG - restXg;
-    float relY = yG - restYg;
-    float relZ = zG - restZg;
-
-    // Angle sign: positive = right tilt, negative = left tilt
-    // We use atan2 to get the angle in the Y-Z plane
-    float angleDeg = atan2f(relX, sqrtf((relY * relY) + (relZ * relZ))) * (180.0f / PI);
-
-    // Angular velocity (deg/s)
-    float velocityDegPerSec = 0.0f;
-    if (lastAngleMs != 0 && lastTiltDir != 0)
-    {
-        unsigned long dt = nowMs - lastAngleMs;
-        if (dt > 0)
-        {
-            velocityDegPerSec = (angleDeg - lastAngleDeg) * 1000.0f / dt;
-        }
-    }
-    lastAngleDeg = angleDeg;
-    lastAngleMs = nowMs;
-
-    // Hysteresis: enter when beyond tiltOnDeg, exit when within tiltOffDeg
-    // This prevents the state from flickering when near the threshold
-    if (angleDeg > tiltOnDeg && lastTiltDir != 1)
-    {
-        Serial.print(F("TILT_RIGHT:"));
-        Serial.print((int)abs(velocityDegPerSec));
-        Serial.print(F(":"));
-        Serial.println(angleDeg, 1);
-        lastTiltDir = 1;
-    }
-    else if (angleDeg < -tiltOnDeg && lastTiltDir != -1)
-    {
-        Serial.print(F("TILT_LEFT:"));
-        Serial.print((int)abs(velocityDegPerSec));
-        Serial.print(F(":"));
-        Serial.println(angleDeg, 1);
-        lastTiltDir = -1;
-    }
-    else if (fabs(angleDeg) < tiltOffDeg)
-    {
-        if (lastTiltDir != 0)
-        {
-            lastAngleMs = 0;
-        }
-        lastTiltDir = 0;
-    }
-}
-
 void calibrateRestPosition()
 {
     // Take 20 samples over 1 second to average out noise
     // This establishes the "zero" position for the user's current grip
     const int numSamples = 20;
-    float sumX = 0.0f;
-    float sumY = 0.0f;
     float sumZ = 0.0f;
+    int validSamples = 0;
 
     for (int i = 0; i < numSamples; i++)
     {
-        if (accel.available())
-        {
-            sumX += accel.getCalculatedX();
-            sumY += accel.getCalculatedY();
-            sumZ += accel.getCalculatedZ();
-        }
+        // Always read the latest values, don't wait for available()
+        sumZ += accel.getCalculatedZ();
+        validSamples++;
         delay(50);
     }
 
-    restXg = sumX / numSamples;
-    restYg = sumY / numSamples;
-    restZg = sumZ / numSamples;
-    calibrated = true;
+    if (validSamples > 0)
+    {
+        restZg = sumZ / validSamples;
+        calibrated = true;
 
-    Serial.print(F("Rest position: X="));
-    Serial.print(restXg, 3);
-    Serial.print(F("g Y="));
-    Serial.print(restYg, 3);
-    Serial.print(F("g Z="));
-    Serial.print(restZg, 3);
-    Serial.println(F("g"));
+        Serial.print(F("Rest position: Z="));
+        Serial.println(restZg, 3);
+    }
+    else
+    {
+        Serial.println(F("Calibration failed: no samples"));
+    }
 }
