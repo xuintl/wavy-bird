@@ -11,7 +11,7 @@ let pipes = [];
 // Game state and score
 let gameState = 'nameEntry'; // 'nameEntry', 'start', 'playing', 'gameOver', 'results'
 let participantName = '';
-let score = 0; // Can go negative
+let score = INITIAL_SCORE; // Can go negative
 let base_x = 0; // for scrolling base
 let totalCollisions = 0;
 let tiltErrors = 0;
@@ -551,7 +551,7 @@ function resetGame() {
   console.log('[DEBUG] Resetting game...');
   pipes = [];
   bird = new Bird();
-  score = 0;
+  score = INITIAL_SCORE;
   pipesCleared = 0;
   stageIndex = 0;
   stagePasses = 0;
@@ -831,7 +831,7 @@ function windowResized() {
 }
 
 function keyPressed() {
-  if (key === '`' || key === '~') {
+  if (key === '`') {
     toggleFullscreen();
   }
 
@@ -840,7 +840,17 @@ function keyPressed() {
     serialManager.connect();
   }
 
-  if ((key === '=') && gameState === 'results') {
+  // Calibration trigger (sends '0' to Arduino)
+  if (key === '=') {
+    if (serialStatus === 'connected') {
+      serialManager.send('0');
+      console.log('[DEBUG] Calibration command sent to Arduino');
+    } else {
+      console.log('[DEBUG] Cannot calibrate: Serial not connected');
+    }
+  }
+
+  if ((key === '~') && gameState === 'results') {
     exportTrialCsv();
     exportSessionSummary();
   }

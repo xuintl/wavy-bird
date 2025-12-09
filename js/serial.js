@@ -6,7 +6,9 @@ class SerialManager {
         this.onClose = onClose;
         this.port = null;
         this.reader = null;
+        this.writer = null;
         this.decoder = new TextDecoder();
+        this.encoder = new TextEncoder();
         this.buffer = '';
     }
 
@@ -24,7 +26,8 @@ class SerialManager {
 
         try {
             this.port = await navigator.serial.requestPort();
-            await this.port.open({ baudRate: 115200 });
+            await this.port.open({ baudRate: 9600 });
+            this.writer = this.port.writable.getWriter();
             if (this.onOpen) this.onOpen();
             this.readLoop();
         } catch (err) {
@@ -37,6 +40,9 @@ class SerialManager {
             if (this.reader) {
                 await this.reader.cancel();
             }
+            if (this.writer) {
+                this.writer.releaseLock();
+            }
             if (this.port) {
                 await this.port.close();
             }
@@ -45,8 +51,22 @@ class SerialManager {
         } finally {
             this.port = null;
             this.reader = null;
+            this.writer = null;
             this.buffer = '';
             if (this.onClose) this.onClose();
+        }
+    }
+
+    async send(data) {
+        if (!this.writer) {
+            console.warn('Serial not connected, cannot send');
+            return;
+        }
+        try {
+            await this.writer.write(this.encoder.encode(data));
+        } catch (err) {
+            console.error('Error sending serial data', err);
+            if (this.onError) this.onError(err);
         }
     }
 
