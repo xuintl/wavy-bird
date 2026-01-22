@@ -1,4 +1,4 @@
-# Wavy Bird — Accelerator-Controlled Flappy Bird
+# Wavy Bird: Accelerator-Controlled Flappy Bird
 
 Physical, browser-based Flappy Bird built with p5.js and the Web Serial API. Play with keyboard/mouse or wave an MMA8452Q accelerometer wired to an Arduino.
 
